@@ -2,11 +2,9 @@
  * LevelDB client binding for YCSB.
  */
 
-package site.yahoo.ycsb.db;
+package site.ycsb.db;
 
-import com.mongodb.BasicDBObject;
-import com.mongodb.DBObject;
-import com.mongodb.util.JSON;
+import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
@@ -17,27 +15,23 @@ import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
 import site.ycsb.*;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.net.URLEncoder;
 import java.text.MessageFormat;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
-import java.util.Vector;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 /**
  * LevelDB client for YCSB framework.
  */
 public class LevelDbClient extends DB {
 
-  private static final String dbUrl = "http://localhost:8080";
-  private static final String deleteUrl = dbUrl + "/del";
-  private static final String insertUrl = dbUrl + "/put";
-  private static final String readUrl = dbUrl + "/get";
+  private String dbUrl = "http://localhost:";
+  private String deleteUrl;
+  private String insertUrl;
+  private String readUrl;
   private static final JSONParser parser = new JSONParser();
 
   private static DefaultHttpClient httpClient;
@@ -81,6 +75,12 @@ public class LevelDbClient extends DB {
   public void init() throws DBException {
     httpClient = new DefaultHttpClient();
     tableKeyPrefix = new HashMap<String, Integer>();
+    Properties pros = getProperties();
+    String port = pros.getProperty("db.port", "8080");
+    dbUrl = dbUrl + port;
+    deleteUrl = dbUrl + "/del";
+    insertUrl = dbUrl + "/put";
+    readUrl = dbUrl + "/get";
   }
 
   /**
@@ -102,13 +102,9 @@ public class LevelDbClient extends DB {
   @Override
   public Status delete(String table, String key) {
     try {
-      httpPost = new HttpPost(MessageFormat.format("{0}?key={1}",
+      httpGet = new HttpGet(MessageFormat.format("{0}?key={1}",
           deleteUrl, key));
-      // System.out.println("# delete request - " +
-      // httpPost.getRequestLine());
-      response = httpClient.execute(httpPost);
-      // System.out.println("# delete response - " +
-      // getStringFromInputStream(response.getEntity().getContent()));
+      response = httpClient.execute(httpGet);
       EntityUtils.consume(response.getEntity());
       return response.getStatusLine().getStatusCode() == 200 ? Status.OK : Status.ERROR;
     } catch (Exception e) {
@@ -131,25 +127,22 @@ public class LevelDbClient extends DB {
   @Override
   public Status insert(String table, String key,
                        Map<String, ByteIterator> values) {
-    try {
       JSONObject jsonValues = new JSONObject();
       jsonValues.putAll(StringByteIterator.getStringMap(
           values));
+    try {
       String urlStringValues = URLEncoder.encode(
           jsonValues.toJSONString(), "UTF-8");
-      httpPost = new HttpPost(MessageFormat.format(
+      httpGet= new HttpGet(MessageFormat.format(
           "{0}?key={1}&value={2}", insertUrl, key, urlStringValues));
-      // System.out.println("# insert request - " +
-      // httpPost.getRequestLine());
-      response = httpClient.execute(httpPost);
-      // System.out.println("# insert response - " +
-      // getStringFromInputStream(response.getEntity().getContent()));
+
+      response = httpClient.execute(httpGet);
       EntityUtils.consume(response.getEntity());
-      return response.getStatusLine().getStatusCode() == 200 ? Status.OK : Status.ERROR;
     } catch (Exception e) {
       e.printStackTrace();
       return Status.ERROR;
     }
+    return response.getStatusLine().getStatusCode() == 200 ? Status.OK : Status.ERROR;
   }
 
   /**
@@ -165,27 +158,46 @@ public class LevelDbClient extends DB {
   @Override
   public Status read(String table, String key, Set<String> fields,
                      Map<String, ByteIterator> result) {
+    httpGet = new HttpGet(MessageFormat.format("{0}?key={1}", readUrl,
+        key));
     try {
-      httpGet = new HttpGet(MessageFormat.format("{0}?key={1}", readUrl,
-          key));
-      // System.out.println("# read request - " +
-      // httpGet.getRequestLine());
       response = httpClient.execute(httpGet);
-      JSONObject jsonResponse = (JSONObject) parser.parse(EntityUtils
-          .toString(response.getEntity()));
-      // System.out.println("# read response - " + jsonResponse);
-      // Use Mongo DBObject to encode back to ByteIterator
-      DBObject bson = (DBObject) JSON.parse(jsonResponse.get("data")
-          .toString());
-      if (bson != null) {
-        result.putAll(bson.toMap());
-      }
-      EntityUtils.consume(response.getEntity());
-      return bson != null ? Status.OK : Status.ERROR;
     } catch (Exception e) {
-      System.err.println(e.toString());
+      System.out.println(e.getMessage());
       return Status.ERROR;
     }
+      HttpEntity entity= response.getEntity();
+      Status status;
+      switch (response.getStatusLine().getStatusCode()) {
+        case 200:
+          JSONObject document;
+          try {
+            document = (JSONObject) parser.parse(EntityUtils
+                .toString(response.getEntity()));
+          } catch (Exception e) {
+            System.err.println(e.getMessage());
+            return Status.ERROR;
+          }
+          if (document != null) {
+            fillMap(result, fields, document);
+            status = Status.OK;
+          } else {
+            status = Status.UNEXPECTED_STATE;
+          }
+          break;
+        case 404:
+          status = Status.NOT_FOUND;
+          break;
+        default:
+          status = Status.ERROR;
+      }
+      try {
+      EntityUtils.consume(entity);
+    } catch (Exception e) {
+        System.err.println(e.getMessage());
+        status = Status.ERROR;
+      }
+    return  status;
   }
 
   /**
@@ -202,38 +214,11 @@ public class LevelDbClient extends DB {
   @Override
   public Status update(String table, String key,
                        Map<String, ByteIterator> values) {
-    try {
-      httpGet = new HttpGet(MessageFormat.format("{0}?key={1}", readUrl,
-          key));
-      // System.out.println("# update read request - " +
-      // httpGet.getRequestLine());
-      response = httpClient.execute(httpGet);
-      JSONObject jsonResponse = (JSONObject) parser.parse(EntityUtils
-          .toString(response.getEntity()));
-      // System.out.println("# update read response - " + jsonResponse);
-      JSONObject existingValues = new JSONObject();
-      // check if key exists in the db
-      if (response.getStatusLine().getStatusCode() == 200) {
-        existingValues = (JSONObject) parser.parse(jsonResponse.get(
-            "data").toString());
-      }
-      existingValues.putAll(StringByteIterator.getStringMap(
-          values));
-      String urlStringValues = URLEncoder.encode(
-          existingValues.toJSONString(), "UTF-8");
-      httpPost = new HttpPost(MessageFormat.format(
-          "{0}?key={1}&value={2}", insertUrl, key, urlStringValues));
-      // System.out.println("# update insert request - " +
-      // httpPost.getRequestLine());
-      response = httpClient.execute(httpPost);
-      // System.out.println("# update insert response - " +
-      // getStringFromInputStream(response.getEntity().getContent()));
-      EntityUtils.consume(response.getEntity());
-      return response.getStatusLine().getStatusCode() == 200 ? Status.OK : Status.ERROR;
-    } catch (Exception e) {
-      System.err.println(e.toString());
-      return Status.ERROR;
-    }
+      final Map<String, ByteIterator> result = new HashMap<>();
+      Status status = read(table, key, null, result);
+      if (status != Status.OK) return status;
+      result.putAll(values);
+      return insert(table, key, result);
   }
 
   /**
@@ -252,40 +237,40 @@ public class LevelDbClient extends DB {
   @Override
   public Status scan(String table, String startkey, int recordcount,
                      Set<String> fields, Vector<HashMap<String, ByteIterator>> result) {
-    try {
-      String scanUrl = dbUrl + "/fwmatch";
+
+      final String scanUrl = dbUrl + "/scan";
       httpGet = new HttpGet(MessageFormat.format("{0}?key={1}&limit={2}",
           scanUrl, startkey, recordcount));
-      // System.out.println("# scan request - " +
-      // httpGet.getRequestLine());
+    JSONArray scanEntries;
+    try {
       response = httpClient.execute(httpGet);
-      JSONObject jsonResponse = (JSONObject) parser.parse(EntityUtils
+
+      scanEntries = (JSONArray) parser.parse(EntityUtils
           .toString(response.getEntity()));
-      // System.out.println("# scan response - " + jsonResponse);
-      JSONArray scanEntries = (JSONArray) parser.parse(jsonResponse.get(
-          "data").toString());
-      for (Object e : scanEntries) {
-        JSONObject entry = (JSONObject) e;
-        DBObject value = (DBObject) JSON.parse(entry.get("value")
-            .toString());
-        DBObject bsonResult = new BasicDBObject();
-        if (fields == null) {
-          bsonResult = value;
-        } else {
-          for (String s : fields) {
-            // get has same result for missing keys and values that
-            // are null
-            bsonResult.put(s, value.get(s));
-          }
-        }
-        HashMap<String, ByteIterator> singleResult = new HashMap<String, ByteIterator>(bsonResult.toMap());
-        result.addElement(singleResult);
-      }
-      EntityUtils.consume(response.getEntity());
-      return response.getStatusLine().getStatusCode() == 200 ? Status.OK : Status.ERROR;
     } catch (Exception e) {
-      System.err.println(e.toString());
+      System.out.println(e.getMessage());
       return Status.ERROR;
+    }
+      for (Object e : scanEntries) {
+        HashMap<String, ByteIterator> values = new HashMap<>();
+        fillMap(values, fields, (Map)e);
+        result.add(values);
+      }
+    try {
+      EntityUtils.consume(response.getEntity());
+    } catch (Exception e) {
+      System.err.println(e.getMessage());
+      return Status.ERROR;
+    }
+    return response.getStatusLine().getStatusCode() == 200 ? Status.OK : Status.ERROR;
+  }
+
+  void fillMap(Map<String, ByteIterator> resultMap, Set<String> fields, Map<String, String> obj) {
+    for (Map.Entry<String, String> stringStringEntry : obj.entrySet()) {
+      Map.Entry<String, String> entry = (Map.Entry) stringStringEntry;
+      if (fields == null || fields.contains(entry.getKey())) {
+        resultMap.put(entry.getKey(), new ByteArrayByteIterator(entry.getValue().getBytes(UTF_8)));
+      }
     }
   }
 }

@@ -184,6 +184,7 @@ LICENSE file.
     <module>jdbc</module>
     <module>kudu</module>
     <module>leveldb</module>
+    <module>leveldbjni</module>
     <module>maprdb</module>
     <module>maprjsondb</module>
     <module>memcached</module>
