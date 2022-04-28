@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
@@ -19,35 +20,39 @@ public class LevelDBClient extends DB {
 
   private static final String PROPERTY_LEVELDB_DIR = "leveldb.dir";
 
+  // leveldb's options configure path
+  private static final String PROPERTY_LEVELDB_OPT_DIR = "levedb.optdir";
+
   // 0 for original, 1 for modified hotDB
   private static final String PROPERTY_LEVELDB_TYPE = "leveldb.type";
 
   // default is original
   private static final String PROPERTY_LEVELDB_TYPE_DEFAULT = "0";
+  private static final String PROPERTY_LEVELDB_OPT_DIR_DEFAULT = "/home/lg/CLionProjects/hotness_aware/config";
 
   private static final Logger LOGGER = LoggerFactory.getLogger(LevelDBClient.class);
 
   @GuardedBy("LevelDBClient.class") private static LevelDB levelDb = null;
 
   @Override
-  public void init() throws DBException, ArithmeticException {
+  public void init() throws DBException {
     if (levelDb == null) {
       Properties pros = getProperties();
       Path levelDbDir = Paths.get(pros.getProperty(PROPERTY_LEVELDB_DIR));
       LOGGER.info("LevelDB data dir: " + levelDbDir);
-      String levelDBType = pros.getProperty(PROPERTY_LEVELDB_TYPE, PROPERTY_LEVELDB_TYPE_DEFAULT);
-      int type = 0;
-      try {
-        type = Integer.parseInt(levelDBType);
-      } catch (NumberFormatException e) {
-        e.printStackTrace();
+      Path leveldbOptDir = Paths.get(pros.getProperty(PROPERTY_LEVELDB_OPT_DIR, PROPERTY_LEVELDB_OPT_DIR_DEFAULT));
+      if (!Files.isDirectory(leveldbOptDir)) {
+        throw new DBException("leveldb options file directory do not exist.");
       }
+      String levelDBType = pros.getProperty(PROPERTY_LEVELDB_TYPE, PROPERTY_LEVELDB_TYPE_DEFAULT);
+      int type;
+      type = Integer.parseInt(levelDBType);
 
       if (type != 0 && type != 1) {
-        throw new ArithmeticException("DB type not valid. [0 for original, 0 for hotDB]");
+        throw new DBException("DB type not valid. [0 for original, 0 for hotDB]");
       }
       try {
-        levelDb = new LevelDB(levelDbDir.toFile(), type);
+        levelDb = new LevelDB(levelDbDir.toFile(), type, leveldbOptDir.toFile());
       } catch (final RuntimeException e) {
         throw new DBException(e);
       }
@@ -114,6 +119,7 @@ public class LevelDBClient extends DB {
   @Override
   public void cleanup() throws DBException {
     super.cleanup();
+    System.err.println(new String(levelDb.getLeveldbStatus()));
     levelDb.close();
   }
 

@@ -1,6 +1,7 @@
 package cn.neu.hotness.leveldbjni;
 
-import java.io.*;
+import java.io.Closeable;
+import java.io.File;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 record ResultPair(byte[] values, int[] offsets) {
@@ -33,14 +34,15 @@ public class LevelDB implements Closeable {
    *
    * @param file    Directory for the DB
    * @param type    0 for leveldb, 1 for hotDB
+   * @param optDir  Directory for the option config
    */
-  public LevelDB(File file, int type) {
-    dbRef = open(file.getAbsolutePath(), type);
+  public LevelDB(File file, int type, File optDir) {
+    dbRef = open(file.getAbsolutePath(), type, optDir.getAbsolutePath());
   }
 
 
-  protected long open(String fileName, int type) {
-    long dbRef = Open(fileName, type);
+  protected long open(String fileName, int type, String OptionName) {
+    long dbRef = Open(fileName, type, OptionName);
     if (dbRef == 0) {
       throw new RuntimeException();
     }
@@ -80,7 +82,15 @@ public class LevelDB implements Closeable {
     return put(dbRef, key, value);
   }
 
-  private native long Open(String fileName, int type);
+  /**
+   * get leveldb status
+   * @return leveldb status string
+   */
+  public byte[] getLeveldbStatus() {
+    return GetLeveldbStatus(dbRef);
+  }
+
+  private native long Open(String fileName, int type, String optDir);
 
   private native boolean put(long dbRef, byte[] key, byte[] value);
 
@@ -91,6 +101,8 @@ public class LevelDB implements Closeable {
   private native ResultPair scan(long dbRef, byte[] key, int limiter);
 
   private native void close(long dbRef);
+
+  private native byte[] GetLeveldbStatus(long dbRef);
 
   /**
    * Flush and close database
